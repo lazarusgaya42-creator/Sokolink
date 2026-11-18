@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SokoLink — Live Stock & Restock Waitlist</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-stone-50 text-stone-900 font-sans antialiased pb-16">
+
+  <!-- TOP HEADER -->
+  <header class="sticky top-0 z-20 bg-white border-b border-stone-200 px-4 py-3 shadow-sm">
+    <div class="max-w-md mx-auto flex items-center justify-between">
+      <div>
+        <h1 id="shopName" class="text-lg font-extrabold tracking-tight text-stone-900">Loading Shop...</h1>
+        <p id="pickupLocation" class="text-xs text-stone-500">Checking pickup point...</p>
+      </div>
+      <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200">
+        <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span> Live Stock
+      </span>
+    </div>
+  </header>
+
+  <!-- MAIN CATALOG GRID -->
+  <main class="max-w-md mx-auto px-4 pt-4">
+    <div id="statusBanner" class="hidden mb-4 rounded-xl bg-emerald-600 p-3 text-sm text-white font-medium shadow"></div>
+    <div id="itemsGrid" class="grid grid-cols-1 gap-4">
+      <p class="text-center text-sm text-stone-500 py-10">Loading catalog...</p>
+    </div>
+  </main>
+
+  <!-- BOOKING MODAL (FOR IN-STOCK ITEMS) -->
+  <div id="bookingModal" class="fixed inset-0 z-30 hidden bg-black/60 flex items-end sm:items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl p-5 shadow-xl">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-base font-bold">Book Item (No Upfront Payment)</h2>
+        <button onclick="closeModals()" class="text-stone-400 hover:text-stone-700 text-xl font-bold">&times;</button>
+      </div>
+      <p id="bookingItemTitle" class="text-sm font-semibold text-emerald-700 mb-3"></p>
+
+      <form id="bookingForm" class="space-y-3">
+        <input type="hidden" id="bookItemId" />
+        <div>
+          <label class="block text-xs font-semibold text-stone-600 mb-1">Your Name</label>
+          <input type="text" id="buyerName" required placeholder="e.g. Brian Kamau" class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-emerald-600 focus:outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-stone-600 mb-1">Your WhatsApp Number</label>
+          <input type="tel" id="buyerWhatsapp" required placeholder="e.g. 0712345678" class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-emerald-600 focus:outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-stone-600 mb-1">How do you want it?</label>
+          <select id="fulfillmentType" onchange="toggleDeliveryNote()" class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm bg-white">
+            <option value="pickup">Physical Shop Pickup</option>
+            <option value="delivery">Rider / Parcel Delivery</option>
+          </select>
+        </div>
+        <div id="deliveryNoteBox" class="hidden">
+          <label class="block text-xs font-semibold text-stone-600 mb-1">Delivery Estate / Landmark</label>
+          <input type="text" id="deliveryNote" placeholder="e.g. Kilimani, Yaya Centre" class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm" />
+        </div>
+        <button type="submit" class="w-full rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white hover:bg-emerald-700 transition">
+          Confirm Booking & Open WhatsApp
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- WAITLIST MODAL (FOR SOLD-OUT ITEMS) -->
+  <div id="waitlistModal" class="fixed inset-0 z-30 hidden bg-black/60 flex items-end sm:items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl p-5 shadow-xl">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-base font-bold">Get Notified on Restock</h2>
+        <button onclick="closeModals()" class="text-stone-400 hover:text-stone-700 text-xl font-bold">&times;</button>
+      </div>
+      <p id="waitlistItemTitle" class="text-sm font-semibold text-amber-700 mb-3"></p>
+
+      <form id="waitlistForm" class="space-y-3">
+        <input type="hidden" id="waitItemId" />
+        <div>
+          <label class="block text-xs font-semibold text-stone-600 mb-1">Your WhatsApp Number</label>
+          <input type="tel" id="waitWhatsapp" required placeholder="e.g. 0712345678" class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-amber-600 focus:outline-none" />
+        </div>
+        <button type="submit" class="w-full rounded-xl bg-amber-600 py-3 text-sm font-bold text-white hover:bg-amber-700 transition">
+          Notify Me When Back in Stock
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- SUPABASE LOGIC -->
+  <script>
+    // PASTE YOUR SUPABASE CREDENTIALS BELOW
+    const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+    const SUPABASE_KEY = 'YOUR_SUPABASE_PUBLISHABLE_KEY';
+
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let currentShop = null;
+    let itemsCache = [];
+
+    async function loadStorefront() {
+      const params = new URLSearchParams(window.location.search);
+      const slug = params.get('shop') || 'demo-shop';
+
+      const { data: shop, error: shopErr } = await db
+        .from('shops')
+        .select('*')
+        .eq('slug', slug)
+        .single();
+
+      if (shopErr || !shop) {
+        document.getElementById('shopName').textContent = 'Shop Not Found';
+        document.getElementById('itemsGrid').innerHTML = `<p class="text-center text-red-600 text-sm py-8">Check your Supabase URL/Key or shop link.</p>`;
+        return;
+      }
+
+      currentShop = shop;
+      document.getElementById('shopName').textContent = shop.shop_name;
+      document.getElementById('pickupLocation').textContent = `Pickup: ${shop.pickup_location || 'Ask Seller'}`;
+
+      const { data: items } = await db
+        .from('items')
+        .select('*')
+        .eq('shop_id', shop.id)
+        .order('created_at', { ascending: false });
+
+      itemsCache = items || [];
+      renderItems();
+    }
+
+    function renderItems() {
+      const grid = document.getElementById('itemsGrid');
+      if (!itemsCache.length) {
+        grid.innerHTML = `<p class="text-center text-stone-500 text-sm py-8">No items listed yet.</p>`;
+        return;
+      }
+
+      grid.innerHTML = itemsCache.map(item => `
+        <div class="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-sm">
+          <div class="relative h-52 bg-stone-100">
+            <img src="${item.image_url || 'https://placehold.co/600x400?text=No+Image'}" alt="${item.name}" class="w-full h-full object-cover ${!item.in_stock ? 'opacity-60 grayscale' : ''}" />
+            <span class="absolute top-3 left-3 rounded-full px-3 py-1 text-xs font-extrabold uppercase tracking-wide ${item.in_stock ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}">
+              ${item.in_stock ? 'In Stock' : 'Sold Out'}
+            </span>
+          </div>
+          <div class="p-4">
+            <div class="flex justify-between items-start gap-2 mb-3">
+              <h3 class="text-base font-bold text-stone-900 leading-snug">${item.name}</h3>
+              <span class="text-base font-extrabold text-emerald-700 whitespace-nowrap">KES ${item.price_kes.toLocaleString()}</span>
+            </div>
+            ${item.in_stock
+              ? `<button onclick="openBooking('${item.id}')" class="w-full rounded-xl bg-stone-900 py-2.5 text-sm font-bold text-white hover:bg-stone-800 transition">Book Pickup / Delivery</button>`
+              : `<button onclick="openWaitlist('${item.id}')" class="w-full rounded-xl bg-amber-100 border border-amber-300 py-2.5 text-sm font-bold text-amber-900 hover:bg-amber-200 transition">Notify Me When Back</button>`
+            }
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function openBooking(itemId) {
+      const item = itemsCache.find(i => i.id === itemId);
+      document.getElementById('bookItemId').value = item.id;
+      document.getElementById('bookingItemTitle').textContent = `${item.name} — KES ${item.price_kes.toLocaleString()}`;
+      document.getElementById('bookingModal').classList.remove('hidden');
+    }
+
+    function openWaitlist(itemId) {
+      const item = itemsCache.find(i => i.id === itemId);
+      document.getElementById('waitItemId').value = item.id;
+      document.getElementById('waitlistItemTitle').textContent = `Out of stock: ${item.name}`;
+      document.getElementById('waitlistModal').classList.remove('hidden');
+    }
+
+    function closeModals() {
+      document.getElementById('bookingModal').classList.add('hidden');
+      document.getElementById('waitlistModal').classList.add('hidden');
+    }
+
+    function toggleDeliveryNote() {
+      const type = document.getElementById('fulfillmentType').value;
+      document.getElementById('deliveryNoteBox').classList.toggle('hidden', type === 'pickup');
+    }
+
+    document.getElementById('bookingForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const itemId = document.getElementById('bookItemId').value;
+      const item = itemsCache.find(i => i.id === itemId);
+      const buyerName = document.getElementById('buyerName').value.trim();
+      const buyerWhatsapp = document.getElementById('buyerWhatsapp').value.trim();
+      const fulfillmentType = document.getElementById('fulfillmentType').value;
+      const deliveryNote = document.getElementById('deliveryNote').value.trim();
+
+      await db.from('bookings').insert([{
+        item_id: item.id,
+        shop_id: currentShop.id,
+        buyer_name: buyerName,
+        buyer_whatsapp: buyerWhatsapp,
+        fulfillment_type: fulfillmentType,
+        delivery_note: deliveryNote
+      }]);
+
+      closeModals();
+      showBanner(`Booked! Opening WhatsApp to confirm with ${currentShop.shop_name}...`);
+
+      const msg = encodeURIComponent(
+        `Hi ${currentShop.shop_name}, I just booked *${item.name}* (KES ${item.price_kes}) via SokoLink.\n` +
+        `Name: ${buyerName}\nMode: ${fulfillmentType.toUpperCase()}${deliveryNote ? ' (' + deliveryNote + ')' : ''}`
+      );
+      window.open(`https://wa.me/${currentShop.whatsapp_number}?text=${msg}`, '_blank');
+    });
+
+    document.getElementById('waitlistForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const itemId = document.getElementById('waitItemId').value;
+      const buyerWhatsapp = document.getElementById('waitWhatsapp').value.trim();
+
+      await db.from('waitlist').insert([{
+        item_id: itemId,
+        shop_id: currentShop.id,
+        buyer_whatsapp: buyerWhatsapp
+      }]);
+
+      closeModals();
+      document.getElementById('waitlistForm').reset();
+      showBanner(`Saved! We will ping ${buyerWhatsapp} as soon as this item restocks.`);
+    });
+
+    function showBanner(text) {
+      const banner = document.getElementById('statusBanner');
+      banner.textContent = text;
+      banner.classList.remove('hidden');
+      setTimeout(() => banner.classList.add('hidden'), 5000);
+    }
+
+    loadStorefront();
+  </script>
+</body>
+</html>
